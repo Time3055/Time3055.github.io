@@ -2,7 +2,7 @@
 layout: post
 title: "更改Letta的理性风格语气"
 date: 2025-07-14
-permalink: /about_AI/
+permalink: /:categories/:year/:month/:day/:title/
 ---
 
 问题：
