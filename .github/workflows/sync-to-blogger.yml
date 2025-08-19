@@ -1,0 +1,83 @@
+name: Sync new posts to Blogger
+
+on:
+  push:
+    branches:
+      - main  # 或者你的主分支名，可能是 master
+    paths:
+      - '_posts/**.md' # 监控 _posts 文件夹下新增或修改的 .md 文件
+      - 'articles/**.md' # 你也可以添加其他存放文章的文件夹
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # 步骤1：获取仓库代码
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2 # 获取最近两次提交，用于识别新增文件
+
+      # 步骤2：识别新增的文章文件
+      - name: Get New Files
+        id: new_files
+        run: |
+          echo "files=$(git diff --name-only --diff-filter=A HEAD^ HEAD | grep -E '\.md$' | xargs)" >> $GITHUB_OUTPUT
+
+      # 步骤3：如果确实有新文件，则执行同步
+      - name: Sync to Blogger
+        if: steps.new_files.outputs.files != ''
+        env:
+          BLOG_ID: ${{ secrets.BLOG_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
+          NEW_FILES: ${{ steps.new_files.outputs.files }}
+        run: |
+          # 安装 pandoc 用于 Markdown 转 HTML
+          sudo apt-get update && sudo apt-get install -y pandoc
+          
+          # 循环处理每一个新增的文件
+          for file in $NEW_FILES; do
+            echo "Processing $file"
+
+            # 从 Markdown 文件中提取标题 (假设标题是文件第一行，格式为 '# My Title')
+            TITLE=$(head -n 1 "$file" | sed 's/# //')
+
+            # 使用 pandoc 将 Markdown 转换为 HTML
+            # --standalone 确保它是一个完整的 HTML 文档
+            # 从第3行开始转换，跳过标题行
+            BODY_HTML=$(tail -n +3 "$file" | pandoc -f markdown -t html)
+
+            # 1. 使用 Refresh Token 获取新的 Access Token
+            TOKEN_RESPONSE=$(curl --silent --request POST --url "https://oauth2.googleapis.com/token" \
+              --header "Content-Type: application/x-www-form-urlencoded" \
+              --data-urlencode "client_id=$CLIENT_ID" \
+              --data-urlencode "client_secret=$CLIENT_SECRET" \
+              --data-urlencode "refresh_token=$REFRESH_TOKEN" \
+              --data-urlencode "grant_type=refresh_token")
+
+            ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | grep -o '"access_token": "[^"]*' | cut -d'"' -f4)
+
+            if [ -z "$ACCESS_TOKEN" ]; then
+              echo "Failed to get Access Token. Response: $TOKEN_RESPONSE"
+              exit 1
+            fi
+
+            # 2. 准备要发送到 Blogger 的 JSON 数据
+            # 使用 jq 可以更安全地处理 JSON 字符串
+            JSON_PAYLOAD=$(jq -n --arg title "$TITLE" --arg content "$BODY_HTML" \
+              '{
+                "kind": "blogger#post",
+                "blog": { "id": "'"$BLOG_ID"'" },
+                "title": $title,
+                "content": $content
+              }')
+
+            # 3. 调用 Blogger API 发布文章
+            curl --request POST \
+              --url "https://www.googleapis.com/blogger/v3/blogs/$BLOG_ID/posts/" \
+              --header "Authorization: Bearer $ACCESS_TOKEN" \
+              --header "Content-Type: application/json" \
+              --data "$JSON_PAYLOAD"
+          done
