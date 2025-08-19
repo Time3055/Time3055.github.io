@@ -36,20 +36,16 @@ jobs:
           REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
           NEW_FILES: ${{ steps.new_files.outputs.files }}
         run: |
-          # 安装 pandoc 用于 Markdown 转 HTML
-          sudo apt-get update && sudo apt-get install -y pandoc
+          # 安装 pandoc 和 jq
+          sudo apt-get update && sudo apt-get install -y pandoc jq
           
-          # 循环处理每一个新增的文件
           for file in $NEW_FILES; do
             echo "Processing $file"
 
-            # 改进1：从 --- 分隔的头部信息(YAML Front Matter)中提取标题
-            # 使用 grep 找到以 'title:' 开头的行，然后用 sed 提取引号中的内容
             TITLE=$(grep '^title:' "$file" | sed -e 's/title: "\(.*\)"/\1/')
 
-            # 改进2：使用 sed 删除整个头部信息，然后将剩余的正文内容用 pandoc 转换为 HTML
-            # '1,/^---$/d' 的意思是：从第1行开始，一直删除到匹配第二个 '---' 的那一行
-            BODY_HTML=$(sed '1,/^---$/d' "$file" | pandoc -f markdown -t html)
+            # 升级后的命令：同时删除 Front Matter 和 raw/endraw 标签
+            BODY_HTML=$(sed -e '1,/^---$/d' -e '/^{% raw %}/d' -e '/^{% endraw %}/d' "$file" | pandoc -f markdown -t html)
 
             # --- 下面的 API 调用部分保持不变 ---
 
